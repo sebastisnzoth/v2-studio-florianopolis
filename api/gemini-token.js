@@ -2,20 +2,7 @@ const MODEL = "gemini-3.1-flash-live-preview";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
-
   const key = process.env.GEMINI_API_KEY;
-
-  if (req.method === "GET") {
-    return res.status(200).json({
-      configured: Boolean(key),
-      model: MODEL,
-      mode: "ephemeral-token"
-    });
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "method_not_allowed" });
-  }
 
   if (!key) {
     return res.status(503).json({
@@ -24,22 +11,12 @@ export default async function handler(req, res) {
     });
   }
 
-  try {
+  async function createToken() {
     const now = Date.now();
-    const expireTime = new Date(now + 30 * 60 * 1000).toISOString();
-    const newSessionExpireTime = new Date(now + 60 * 1000).toISOString();
-
-    const body = {
+    const authToken = {
       uses: 1,
-      expireTime,
-      newSessionExpireTime,
-      liveConnectConstraints: {
-        model: `models/${MODEL}`,
-        config: {
-          sessionResumption: {},
-          responseModalities: ["AUDIO"]
-        }
-      }
+      expireTime: new Date(now + 30 * 60 * 1000).toISOString(),
+      newSessionExpireTime: new Date(now + 60 * 1000).toISOString()
     };
 
     const r = await fetch(
@@ -50,12 +27,40 @@ export default async function handler(req, res) {
           "x-goog-api-key": key,
           "content-type": "application/json"
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify({ authToken })
       }
     );
 
     const data = await r.json().catch(() => ({}));
+    return { r, data, authToken };
+  }
 
+  if (req.method === "GET") {
+    if (req.query?.test !== "1") {
+      return res.status(200).json({ configured: true, model: MODEL, mode: "ephemeral-token" });
+    }
+    try {
+      const { r, data } = await createToken();
+      if (!r.ok || !data.name) {
+        return res.status(r.status || 502).json({
+          configured: true,
+          tokenCreation: false,
+          status: r.status,
+          error: data?.error?.message || "Could not create Gemini Live token."
+        });
+      }
+      return res.status(200).json({ configured: true, tokenCreation: true, model: MODEL, mode: "ephemeral-token" });
+    } catch (e) {
+      return res.status(500).json({ configured: true, tokenCreation: false, error: String(e?.message || e) });
+    }
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "method_not_allowed" });
+  }
+
+  try {
+    const { r, data, authToken } = await createToken();
     if (!r.ok || !data.name) {
       console.error("Gemini token provisioning failed", r.status, data);
       return res.status(r.status || 502).json({
@@ -67,7 +72,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       token: data.name,
       model: MODEL,
-      expires: expireTime
+      expires: authToken.expireTime
     });
   } catch (e) {
     console.error("Gemini token exception", e);
