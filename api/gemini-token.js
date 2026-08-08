@@ -27,7 +27,7 @@ export default async function handler(req, res) {
           "x-goog-api-key": key,
           "content-type": "application/json"
         },
-        body: JSON.stringify({ authToken })
+        body: JSON.stringify(authToken)
       }
     );
 
